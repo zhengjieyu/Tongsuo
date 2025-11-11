@@ -90,7 +90,7 @@
  * Variant-specific constants and structures
  * -----------------------------------------
  */
-# define EVP_PKEY_ML_KEM_512            NID_ML_KEM_512
+
 # define ML_KEM_512_BITS                512
 # define ML_KEM_512_RANK                2
 # define ML_KEM_512_ETA1                3
@@ -100,7 +100,6 @@
 # define ML_KEM_512_SECBITS             128
 # define ML_KEM_512_SECURITY_CATEGORY   1
 
-# define EVP_PKEY_ML_KEM_768            NID_ML_KEM_768
 # define ML_KEM_768_BITS                768
 # define ML_KEM_768_RANK                3
 # define ML_KEM_768_ETA1                2
@@ -110,7 +109,6 @@
 # define ML_KEM_768_SECBITS             192
 # define ML_KEM_768_SECURITY_CATEGORY   3
 
-# define EVP_PKEY_ML_KEM_1024           NID_ML_KEM_1024
 # define ML_KEM_1024_BITS               1024
 # define ML_KEM_1024_RANK               4
 # define ML_KEM_1024_ETA1               2

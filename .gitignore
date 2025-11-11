@@ -247,3 +247,7 @@ doc-nits
 
 # Mac .dSYM files
 *.dSYM
+
+# vscode 
+.vscode/
+

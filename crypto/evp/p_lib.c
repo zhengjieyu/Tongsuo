@@ -1052,7 +1052,9 @@ static const OSSL_ITEM standard_name2type[] = {
     /* SM2DH-MLKEM768-HYBRID, only for experimental purpose */
     { EVP_PKEY_SM2DH_MLKEM768_HYBRID,   "SM2DH-MLKEM768-HYBRID"},
     { EVP_PKEY_ML_DSA_65,  "ML-DSA-65" },
+    { EVP_PKEY_ML_KEM_512,  "ML-KEM-512" },
     { EVP_PKEY_ML_KEM_768,  "ML-KEM-768" },
+    { EVP_PKEY_ML_KEM_1024,  "ML-KEM-1024" },
 };
 
 int evp_pkey_name2type(const char *name)
