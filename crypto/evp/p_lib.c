@@ -12,6 +12,7 @@
  * internal use.
  */
 #include "internal/deprecated.h"
+#include "include/crypto/ml_kem.h"
 
 #include <assert.h>
 #include <stdio.h>
