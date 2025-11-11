@@ -1050,5 +1050,8 @@ wbsm4_wsise_ofb128		1279
 wbsm4_wsise_cfb128		1280
 sm2dh_mlkem768_hybrid		1281
 ML_DSA_65		1282
+ML_KEM_512  1283
+ML_KEM_768  1284
+ML_KEM_1024 1285
 delegated_name_constraints		1298
 associated_information		1319

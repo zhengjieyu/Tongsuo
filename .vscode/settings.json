@@ -1,0 +1,9 @@
+{
+  "files.associations": {
+    "ml_kem.h": "c",
+    "ml_dsa_local.h": "c",
+    "ml_dsa_poly.h": "c",
+    "ml_dsa_symmetric.h": "c",
+    "constant_time.h": "c"
+  }
+}

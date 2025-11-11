@@ -934,6 +934,9 @@ static const unsigned char so[6647] = {
     0x2A,0x81,0x1C,0xCF,0x55,0x01,0x87,0x69,       /* [ 6626] OBJ_sm2dh_mlkem768_hybrid */
     0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x03,0x12,  /* [ 6634] OBJ_ML_DSA_65 */
     0x55,0x1D,0x4B,                                /* [ 6643] OBJ_associated_information */
+    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x01,  /* [ 6646] OBJ_ML_KEM_512 */
+    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x02,  /* [ 6655] OBJ_ML_KEM_768 */
+    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x03,  /* [ 6664] OBJ_ML_KEM_1024 */
 };
 
 #define NUM_NID 1320
@@ -2221,6 +2224,9 @@ static const ASN1_OBJECT nid_objs[NUM_NID] = {
     {"WBSM4-WSISE-CFB", "wbsm4-wsise-cfb", NID_wbsm4_wsise_cfb128},
     {"SM2DH-MLKEM768-HYBRID", "sm2dh-mlkem768-hybrid", NID_sm2dh_mlkem768_hybrid, 8, &so[6626]},
     {"id-ml-dsa-65", "ML-DSA-65", NID_ML_DSA_65, 9, &so[6634]},
+    {"id-alg-ml-kem-512", "ML-KEM-512", NID_ML_KEM_512, 9, &so[6646]},
+    {"id-alg-ml-kem-768", "ML-KEM-768", NID_ML_KEM_768, 9, &so[6655]},
+    {"id-alg-ml-kem-1024", "ML-KEM-1024", NID_ML_KEM_1024, 9, &so[6664]},
     { NULL, NULL, NID_undef },
     { NULL, NULL, NID_undef },
     { NULL, NULL, NID_undef },
@@ -5073,6 +5079,9 @@ static const unsigned int obj_objs[NUM_OBJ] = {
     1118,    /* OBJ_RSA_SHA3_384                 2 16 840 1 101 3 4 3 15 */
     1119,    /* OBJ_RSA_SHA3_512                 2 16 840 1 101 3 4 3 16 */
     1282,    /* OBJ_ML_DSA_65                    2 16 840 1 101 3 4 3 18 */
+    1283,    /* OBJ_ML_KEM_512                   2 16 840 1 101 3 4 4 1 */
+    1284,    /* OBJ_ML_KEM_768                   2 16 840 1 101 3 4 4 2 */
+    1285,    /* OBJ_ML_KEM_1024                  2 16 840 1 101 3 4 4 3 */
       71,    /* OBJ_netscape_cert_type           2 16 840 1 113730 1 1 */
       72,    /* OBJ_netscape_base_url            2 16 840 1 113730 1 2 */
       73,    /* OBJ_netscape_revocation_url      2 16 840 1 113730 1 3 */

@@ -533,6 +533,7 @@ my @disablables = (
     "zkp-transcript",
     "bn-method",
     "kyber",
+    "ml_kem",
     "sm2dh-mlkem768-hybrid"
     );
 foreach my $proto ((@tls, @dtls))
@@ -627,6 +628,7 @@ our %disabled = ( # "what"         => "comment"
                   "wbsm4-baiwu"         => "default",
                   "wbsm4-wsise"         => "default",
                   #"kyber"               => "default",
+                  #"ml_kem"               => "default",
                   #"sm2dh-mlkem768-hybrid"  => "default",
                 );
 
