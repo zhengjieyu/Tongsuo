@@ -335,15 +335,19 @@ static const uint16_t kModRoots[128] = {
  * SHA3-256, then |outlen| must be the correct length for that function.
  */
 static __owur
-int single_keccak(uint8_t *out, size_t outlen, const uint8_t *in, size_t inlen,
+int single_keccak(uint8_t *out, size_t outlen,
+                  const uint8_t *in, size_t inlen,
                   EVP_MD_CTX *mdctx)
 {
     unsigned int sz = (unsigned int) outlen;
+    const EVP_MD *md = EVP_MD_CTX_get0_md(mdctx);
 
     if (!EVP_DigestUpdate(mdctx, in, inlen))
         return 0;
-    if (EVP_MD_xof(EVP_MD_CTX_get0_md(mdctx)))
+
+    if (EVP_MD_get_flags(md) & EVP_MD_FLAG_XOF)
         return EVP_DigestFinalXOF(mdctx, out, outlen);
+
     return EVP_DigestFinal_ex(mdctx, out, &sz)
         && ossl_assert((size_t) sz == outlen);
 }
@@ -435,7 +439,7 @@ int kdf(uint8_t out[ML_KEM_SHARED_SECRET_BYTES],
  * uniformly distributed elements in the range [0,q). This is used for matrix
  * expansion and only operates on public inputs.
  */
-static __owur
+static __owur 
 int sample_scalar(scalar *out, EVP_MD_CTX *mdctx)
 {
     uint16_t *curr = out->c, *endout = curr + DEGREE;
@@ -445,8 +449,13 @@ int sample_scalar(scalar *out, EVP_MD_CTX *mdctx)
     uint8_t b1, b2, b3;
 
     do {
-        if (!EVP_DigestSqueeze(mdctx, in = buf, sizeof(buf)))
+        if (!(EVP_MD_get_flags(EVP_MD_CTX_get0_md(mdctx)) & EVP_MD_FLAG_XOF))
             return 0;
+
+        if (!EVP_DigestFinalXOF(mdctx, buf, sizeof(buf)))
+            return 0;
+
+        in = buf;
         do {
             b1 = *in++;
             b2 = *in++;
@@ -462,6 +471,7 @@ int sample_scalar(scalar *out, EVP_MD_CTX *mdctx)
                 *curr++ = d;
         } while (in < endin);
     } while (curr < endout);
+
     return 1;
 }
 
