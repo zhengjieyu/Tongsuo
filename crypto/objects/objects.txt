@@ -383,9 +383,6 @@ sm-scheme 802           : ZUC-128-EIA3          : zuc-128-eia3
 sm-scheme 1001          : SM2DH-MLKEM768-HYBRID : sm2dh-mlkem768-hybrid 
 
 
-nistKems 1 : id-alg-ml-kem-512  : ML-KEM-512
-nistKems 2 : id-alg-ml-kem-768  : ML-KEM-768
-nistKems 3 : id-alg-ml-kem-1024 : ML-KEM-1024
 
 
 # From RFC4231
@@ -1001,6 +998,11 @@ sigAlgs 14	: id-rsassa-pkcs1-v1_5-with-sha3-256	: RSA-SHA3-256
 sigAlgs 15	: id-rsassa-pkcs1-v1_5-with-sha3-384	: RSA-SHA3-384
 sigAlgs 16	: id-rsassa-pkcs1-v1_5-with-sha3-512	: RSA-SHA3-512
 sigAlgs 18      : id-ml-dsa-65      : ML-DSA-65
+
+!Alias nistKems nistAlgorithms 4
+nistKems 1 : id-alg-ml-kem-512  : ML-KEM-512
+nistKems 2 : id-alg-ml-kem-768  : ML-KEM-768
+nistKems 3 : id-alg-ml-kem-1024 : ML-KEM-1024
 
 # Hold instruction CRL entry extension
 !Cname hold-instruction-code

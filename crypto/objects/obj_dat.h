@@ -933,13 +933,13 @@ static const unsigned char so[6674] = {
     0x60,0x86,0x48,0x01,0x86,0xF9,0x66,0xAD,0xCA,0x7B,0x01,0x01,  /* [ 6614] OBJ_oracle_jdk_trustedkeyusage */
     0x2A,0x81,0x1C,0xCF,0x55,0x01,0x87,0x69,       /* [ 6626] OBJ_sm2dh_mlkem768_hybrid */
     0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x03,0x12,  /* [ 6634] OBJ_ML_DSA_65 */
-    0x55,0x1D,0x4B,                                /* [ 6643] OBJ_associated_information */
-    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x01,  /* [ 6646] OBJ_ML_KEM_512 */
-    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x02,  /* [ 6655] OBJ_ML_KEM_768 */
-    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x03,  /* [ 6664] OBJ_ML_KEM_1024 */
+    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x01,  /* [ 6643] OBJ_ML_KEM_512 */
+    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x02,  /* [ 6652] OBJ_ML_KEM_768 */
+    0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x03,  /* [ 6661] OBJ_ML_KEM_1024 */
+    0x55,0x1D,0x4B,                                /* [ 6670] OBJ_associated_information */
 };
 
-#define NUM_NID 1323
+#define NUM_NID 1320
 static const ASN1_OBJECT nid_objs[NUM_NID] = {
     {"UNDEF", "undefined", NID_undef},
     {"rsadsi", "RSA Data Security, Inc.", NID_rsadsi, 6, &so[0]},
@@ -2224,9 +2224,9 @@ static const ASN1_OBJECT nid_objs[NUM_NID] = {
     {"WBSM4-WSISE-CFB", "wbsm4-wsise-cfb", NID_wbsm4_wsise_cfb128},
     {"SM2DH-MLKEM768-HYBRID", "sm2dh-mlkem768-hybrid", NID_sm2dh_mlkem768_hybrid, 8, &so[6626]},
     {"id-ml-dsa-65", "ML-DSA-65", NID_ML_DSA_65, 9, &so[6634]},
-    {"id-alg-ml-kem-512", "ML-KEM-512", NID_ML_KEM_512, 9, &so[6646]},
-    {"id-alg-ml-kem-768", "ML-KEM-768", NID_ML_KEM_768, 9, &so[6655]},
-    {"id-alg-ml-kem-1024", "ML-KEM-1024", NID_ML_KEM_1024, 9, &so[6664]},
+    {"id-alg-ml-kem-512", "ML-KEM-512", NID_ML_KEM_512, 9, &so[6643]},
+    {"id-alg-ml-kem-768", "ML-KEM-768", NID_ML_KEM_768, 9, &so[6652]},
+    {"id-alg-ml-kem-1024", "ML-KEM-1024", NID_ML_KEM_1024, 9, &so[6661]},
     { NULL, NULL, NID_undef },
     { NULL, NULL, NID_undef },
     { NULL, NULL, NID_undef },
@@ -2260,13 +2260,10 @@ static const ASN1_OBJECT nid_objs[NUM_NID] = {
     { NULL, NULL, NID_undef },
     { NULL, NULL, NID_undef },
     { NULL, NULL, NID_undef },
-    { NULL, NULL, NID_undef },
-    { NULL, NULL, NID_undef },
-    { NULL, NULL, NID_undef },
-    {"associatedInformation", "X509v3 Associated Information", NID_associated_information, 3, &so[6643]},
+    {"associatedInformation", "X509v3 Associated Information", NID_associated_information, 3, &so[6670]},
 };
 
-#define NUM_SN 1034
+#define NUM_SN 1037
 static const unsigned int sn_objs[NUM_SN] = {
      364,    /* "AD_DVCS" */
      419,    /* "AES-128-CBC" */
@@ -2704,6 +2701,9 @@ static const unsigned int sn_objs[NUM_SN] = {
      323,    /* "id-alg-des40" */
      326,    /* "id-alg-dh-pop" */
      325,    /* "id-alg-dh-sig-hmac-sha1" */
+    1285,    /* "id-alg-ml-kem-1024" */
+    1283,    /* "id-alg-ml-kem-512" */
+    1284,    /* "id-alg-ml-kem-768" */
      324,    /* "id-alg-noSignature" */
      268,    /* "id-cct" */
      361,    /* "id-cct-PKIData" */
@@ -3304,7 +3304,7 @@ static const unsigned int sn_objs[NUM_SN] = {
     1093,    /* "x509ExtAdmission" */
 };
 
-#define NUM_LN 1034
+#define NUM_LN 1037
 static const unsigned int ln_objs[NUM_LN] = {
      363,    /* "AD Time Stamping" */
      405,    /* "ANSI X9.62" */
@@ -3370,6 +3370,9 @@ static const unsigned int ln_objs[NUM_LN] = {
      142,    /* "Invalidity Date" */
      504,    /* "MIME MHS" */
     1282,    /* "ML-DSA-65" */
+    1285,    /* "ML-KEM-1024" */
+    1283,    /* "ML-KEM-512" */
+    1284,    /* "ML-KEM-768" */
      388,    /* "Mail" */
      383,    /* "Management" */
      417,    /* "Microsoft CSP Name" */
