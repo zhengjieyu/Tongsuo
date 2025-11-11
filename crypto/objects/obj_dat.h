@@ -939,7 +939,7 @@ static const unsigned char so[6674] = {
     0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x04,0x03,  /* [ 6664] OBJ_ML_KEM_1024 */
 };
 
-#define NUM_NID 1320
+#define NUM_NID 1323
 static const ASN1_OBJECT nid_objs[NUM_NID] = {
     {"UNDEF", "undefined", NID_undef},
     {"rsadsi", "RSA Data Security, Inc.", NID_rsadsi, 6, &so[0]},
