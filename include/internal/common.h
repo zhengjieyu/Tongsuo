@@ -49,8 +49,7 @@ __owur static ossl_inline int ossl_assert_int(int expr, const char *exprstr,
     return expr;
 }
 
-#  define ossl_assert(x) ossl_assert_int((x) != 0, "Assertion failed: "#x, \
-                                         __FILE__, __LINE__)
+#  define ossl_assert(x) ossl_assert_int((x) != 0, "Assertion failed: "#x, __FILE__, __LINE__)
 
 # endif
 
