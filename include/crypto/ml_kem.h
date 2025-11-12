@@ -208,8 +208,7 @@ typedef struct ossl_ml_kem_key_st {
 # define ossl_ml_kem_have_prvkey(key)   ((key)->s != NULL)
 # define ossl_ml_kem_have_seed(key)     ((key)->d != NULL)
 # define ossl_ml_kem_have_dkenc(key)    ((key)->encoded_dk != NULL)
-# define ossl_ml_kem_decoded_key(key)   ((key)->encoded_dk != NULL \
-                                         || ((key)->s == NULL && (key)->d != NULL))
+# define ossl_ml_kem_decoded_key(key)   ((key)->encoded_dk != NULL || ((key)->s == NULL && (key)->d != NULL))
 
 /*
  * ----- ML-KEM key lifecycle
