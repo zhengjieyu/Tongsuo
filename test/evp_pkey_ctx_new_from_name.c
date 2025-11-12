@@ -1,7 +1,7 @@
 #include <stdio.h>
-#include "./include/openssl/evp.h"
-#include "./include/openssl/err.h"
 
+#include <openssl/evp.h>
+#include <openssl/err.h>
 
 int main(int argc, char *argv[])
 {
