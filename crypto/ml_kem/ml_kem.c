@@ -10,10 +10,24 @@
 #include <openssl/byteorder.h>
 #include <openssl/rand.h>
 #include <openssl/proverr.h>
+#include <openssl/crypto.h>
 #include "crypto/ml_kem.h"
 #include "internal/common.h"
 #include "internal/constant_time.h"
 #include "internal/sha3.h"
+
+/*
+ * Assembly optimized polynomial arithmetic backends.  The capability probe
+ * and the AVX2 routines live in asm/ml_kem_poly-x86_64.pl and are declared
+ * in crypto/ml_kem.h so that symbol-prefix builds rename the C references
+ * in step with the assembly symbols; scalar C code is used on other
+ * platforms and on x86_64 CPUs without AVX2.
+ */
+#if !defined(OPENSSL_NO_ASM) \
+    && (defined(__x86_64) || defined(__x86_64__) \
+        || defined(_M_AMD64) || defined(_M_X64))
+# define ML_KEM_POLY_ASM
+#endif
 
 #if defined(OPENSSL_CONSTANT_TIME_VALIDATION)
 #include <valgrind/memcheck.h>
@@ -498,6 +512,69 @@ static void scalar_mult_const(scalar *s, uint16_t a)
     } while (curr < end);
 }
 
+/*
+ * Polynomial arithmetic backend dispatch.
+ * This follows the upstream ml_kem NTT dispatch pattern: the function
+ * pointer takes the original function name so that call sites stay
+ * unchanged, the C implementation is renamed to *_generic, and
+ * ml_kem_poly_init() upgrades the pointers once when the CPU supports
+ * the assembly backend.  Initialization is triggered from
+ * ossl_ml_kem_get_vinfo(), which every public entry point calls before
+ * any polynomial arithmetic can run.
+ */
+#if defined(ML_KEM_POLY_ASM)
+typedef void (*ml_kem_scalar_binop_fn)(scalar *lhs, const scalar *rhs);
+typedef void (*ml_kem_scalar_unop_fn)(scalar *s);
+
+static void scalar_add_generic(scalar *lhs, const scalar *rhs);
+static void scalar_add_avx2(scalar *lhs, const scalar *rhs);
+static void scalar_sub_generic(scalar *lhs, const scalar *rhs);
+static void scalar_sub_avx2(scalar *lhs, const scalar *rhs);
+static void scalar_ntt_generic(scalar *s);
+static void scalar_ntt_avx2(scalar *s);
+static void scalar_inverse_ntt_generic(scalar *s);
+static void scalar_inverse_ntt_avx2(scalar *s);
+static void scalar_mult_generic(scalar *out, const scalar *lhs,
+                                const scalar *rhs);
+static void scalar_mult_avx2(scalar *out, const scalar *lhs,
+                             const scalar *rhs);
+
+typedef void (*ml_kem_scalar_basemul_fn)(scalar *out, const scalar *lhs,
+                                         const scalar *rhs);
+
+static ml_kem_scalar_binop_fn scalar_add = scalar_add_generic;
+static ml_kem_scalar_binop_fn scalar_sub = scalar_sub_generic;
+static ml_kem_scalar_unop_fn scalar_ntt = scalar_ntt_generic;
+static ml_kem_scalar_unop_fn scalar_inverse_ntt = scalar_inverse_ntt_generic;
+static ml_kem_scalar_basemul_fn scalar_mult = scalar_mult_generic;
+#else
+# define scalar_add_generic scalar_add
+# define scalar_sub_generic scalar_sub
+# define scalar_ntt_generic scalar_ntt
+# define scalar_inverse_ntt_generic scalar_inverse_ntt
+# define scalar_mult_generic scalar_mult
+#endif
+
+static CRYPTO_ONCE ml_kem_poly_once = CRYPTO_ONCE_STATIC_INIT;
+
+/*
+ * Initialize polynomial arithmetic function pointers to the AVX2
+ * implementations if available.  Scalar implementations are used by
+ * default.
+ */
+static void ml_kem_poly_init(void)
+{
+#if defined(ML_KEM_POLY_ASM)
+    if (ml_kem_poly_avx2_capable()) {
+        scalar_add = scalar_add_avx2;
+        scalar_sub = scalar_sub_avx2;
+        scalar_ntt = scalar_ntt_avx2;
+        scalar_inverse_ntt = scalar_inverse_ntt_avx2;
+        scalar_mult = scalar_mult_avx2;
+    }
+#endif
+}
+
 /*-
  * FIPS 203, Section 4.3, Algoritm 9: "NTT".
  * In-place number theoretic transform of a given scalar.  Note that ML-KEM's
@@ -507,7 +584,7 @@ static void scalar_mult_const(scalar *s, uint16_t a)
  * elements in GF(3329^2), with the coefficients of the elements being
  * consecutive entries in |s->c|.
  */
-static void scalar_ntt(scalar *s)
+static void scalar_ntt_generic(scalar *s)
 {
     const uint16_t *roots = kNTTRoots;
     uint16_t *end = s->c + DEGREE;
@@ -531,6 +608,13 @@ static void scalar_ntt(scalar *s)
     } while ((offset >>= 1) >= 2);
 }
 
+#if defined(ML_KEM_POLY_ASM)
+static void scalar_ntt_avx2(scalar *s)
+{
+    ml_kem_ntt_avx2(s->c);
+}
+#endif
+
 /*-
  * FIPS 203, Section 4.3, Algoritm 10: "NTT^(-1)".
  * In-place inverse number theoretic transform of a given scalar, with pairs of
@@ -539,7 +623,7 @@ static void scalar_ntt(scalar *s)
  * iFFT to account for the fact that 3329 does not have a 512th root of unity,
  * using the precomputed 128 roots of unity stored in InverseNTTRoots.
  */
-static void scalar_inverse_ntt(scalar *s)
+static void scalar_inverse_ntt_generic(scalar *s)
 {
     const uint16_t *roots = kInverseNTTRoots;
     uint16_t *end = s->c + DEGREE;
@@ -564,8 +648,16 @@ static void scalar_inverse_ntt(scalar *s)
     scalar_mult_const(s, kInverseDegree);
 }
 
+#if defined(ML_KEM_POLY_ASM)
+/* The assembly transform includes the kInverseDegree scaling. */
+static void scalar_inverse_ntt_avx2(scalar *s)
+{
+    ml_kem_intt_avx2(s->c);
+}
+#endif
+
 /* Addition updating the LHS scalar in-place. */
-static void scalar_add(scalar *lhs, const scalar *rhs)
+static void scalar_add_generic(scalar *lhs, const scalar *rhs)
 {
     int i;
 
@@ -573,14 +665,28 @@ static void scalar_add(scalar *lhs, const scalar *rhs)
         lhs->c[i] = reduce_once(lhs->c[i] + rhs->c[i]);
 }
 
+#if defined(ML_KEM_POLY_ASM)
+static void scalar_add_avx2(scalar *lhs, const scalar *rhs)
+{
+    ml_kem_scalar_add_avx2(lhs->c, rhs->c);
+}
+#endif
+
 /* Subtraction updating the LHS scalar in-place. */
-static void scalar_sub(scalar *lhs, const scalar *rhs)
+static void scalar_sub_generic(scalar *lhs, const scalar *rhs)
 {
     int i;
 
     for (i = 0; i < DEGREE; i++)
         lhs->c[i] = reduce_once(lhs->c[i] - rhs->c[i] + kPrime);
 }
+
+#if defined(ML_KEM_POLY_ASM)
+static void scalar_sub_avx2(scalar *lhs, const scalar *rhs)
+{
+    ml_kem_scalar_sub_avx2(lhs->c, rhs->c);
+}
+#endif
 
 /*
  * Multiplying two scalars in the number theoretically transformed state. Since
@@ -593,8 +699,8 @@ static void scalar_sub(scalar *lhs, const scalar *rhs)
  * two reduced numbers together, so we need some intermediate reduction steps,
  * even if an uint64_t could hold 3 multiplied numbers.
  */
-static void scalar_mult(scalar *out, const scalar *lhs,
-                        const scalar *rhs)
+static void scalar_mult_generic(scalar *out, const scalar *lhs,
+                                const scalar *rhs)
 {
     uint16_t *curr = out->c, *end = curr + DEGREE;
     const uint16_t *lc = lhs->c, *rc = rhs->c;
@@ -609,6 +715,14 @@ static void scalar_mult(scalar *out, const scalar *lhs,
         *curr++ = reduce(l0 * r1 + l1 * r0);
     } while (curr < end);
 }
+
+#if defined(ML_KEM_POLY_ASM)
+static void scalar_mult_avx2(scalar *out, const scalar *lhs,
+                             const scalar *rhs)
+{
+    ml_kem_basemul_avx2(out->c, lhs->c, rhs->c);
+}
+#endif
 
 /* Above, but add the result to an existing scalar */
 static ossl_inline
@@ -1597,6 +1711,8 @@ ossl_ml_kem_key_reset(ML_KEM_KEY *key)
 /* Retrieve the parameters of one of the ML-KEM variants */
 const ML_KEM_VINFO *ossl_ml_kem_get_vinfo(int evp_type)
 {
+    (void)CRYPTO_THREAD_run_once(&ml_kem_poly_once, ml_kem_poly_init);
+
     switch (evp_type) {
     case EVP_PKEY_ML_KEM_512:
         return &vinfo_map[ML_KEM_512_VINFO];
