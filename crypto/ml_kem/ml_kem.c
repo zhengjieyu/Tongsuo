@@ -1269,6 +1269,70 @@ int gencbd_vector_ntt(scalar *out, CBD_FUNC cbd, uint8_t *counter,
 
 /* The |ETA1| value for ML-KEM-512 is 3, the rest and all ETA2 values are 2. */
 #define CBD1(evp_type)  ((evp_type) == EVP_PKEY_ML_KEM_512 ? cbd_3 : cbd_2)
+#define ETA1(evp_type)  ((evp_type) == EVP_PKEY_ML_KEM_512 ? 3 : 2)
+
+/*
+ * Task-level sampling vtable.  Phase 3 introduces this so that a SHAKE x4
+ * backend can batch four independent Keccak streams inside matrix expansion
+ * and the noise generators, without exposing SIMD details to the high-level
+ * keygen/encrypt control flow.  This step (3b) wires only the generic table:
+ * the control flow is unchanged and KAT output is identical.
+ *
+ * keygen s and e are nonce-continuous with no intervening computation, so they
+ * form one batchable unit (keygen_noise).  In encrypt, y must be consumed to
+ * form u/v before e1 is sampled into the same scratch, so y and e1 cannot be
+ * merged; each is a separate cbd_vector call and the lone e2 stays scalar.
+ */
+typedef struct {
+    int (*matrix_expand)(EVP_MD_CTX *mdctx, ML_KEM_KEY *key);
+    int (*keygen_noise)(scalar *s, scalar *e,
+                        const uint8_t seed[ML_KEM_RANDOM_BYTES],
+                        int rank, int eta,
+                        EVP_MD_CTX *mdctx, const ML_KEM_KEY *key);
+    int (*cbd_vector)(scalar *out,
+                      const uint8_t seed[ML_KEM_RANDOM_BYTES],
+                      uint8_t *counter, int rank, int eta, int apply_ntt,
+                      EVP_MD_CTX *mdctx, const ML_KEM_KEY *key);
+} ML_KEM_SAMPLE_OPS;
+
+/* Generic keygen noise: sample s then e as one nonce-continuous unit. */
+static __owur
+int keygen_noise_generic(scalar *s, scalar *e,
+                         const uint8_t seed[ML_KEM_RANDOM_BYTES],
+                         int rank, int eta,
+                         EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+{
+    CBD_FUNC cbd = (eta == 3) ? cbd_3 : cbd_2;
+    uint8_t counter = 0;
+
+    return gencbd_vector_ntt(s, cbd, &counter, seed, rank, mdctx, key)
+        && gencbd_vector_ntt(e, cbd, &counter, seed, rank, mdctx, key);
+}
+
+/* Generic single-vector CBD; apply_ntt selects the NTT-transformed variant. */
+static __owur
+int cbd_vector_generic(scalar *out, const uint8_t seed[ML_KEM_RANDOM_BYTES],
+                       uint8_t *counter, int rank, int eta, int apply_ntt,
+                       EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+{
+    CBD_FUNC cbd = (eta == 3) ? cbd_3 : cbd_2;
+
+    return apply_ntt
+        ? gencbd_vector_ntt(out, cbd, counter, seed, rank, mdctx, key)
+        : gencbd_vector(out, cbd, counter, seed, rank, mdctx, key);
+}
+
+static const ML_KEM_SAMPLE_OPS ml_kem_sample_generic = {
+    matrix_expand,
+    keygen_noise_generic,
+    cbd_vector_generic,
+};
+
+/* Phase 3 (3b): only the generic table exists; x4 backend is added in 3d. */
+static const ML_KEM_SAMPLE_OPS *ml_kem_sample_ops(void)
+{
+    return &ml_kem_sample_generic;
+}
 
 /*
  * FIPS 203, Section 5.2, Algorithm 14: K-PKE.Encrypt.
@@ -1293,7 +1357,8 @@ int encrypt_cpa(uint8_t out[ML_KEM_SHARED_SECRET_BYTES],
                 EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
 {
     const ML_KEM_VINFO *vinfo = key->vinfo;
-    CBD_FUNC cbd_1 = CBD1(vinfo->evp_type);
+    const ML_KEM_SAMPLE_OPS *sops = ml_kem_sample_ops();
+    int eta1 = ETA1(vinfo->evp_type);
     int rank = vinfo->rank;
     /* We can use tmp[0..rank-1] as storage for |y|, then |e1|, ... */
     scalar *y = &tmp[0], *e1 = y, *e2 = y;
@@ -1306,7 +1371,7 @@ int encrypt_cpa(uint8_t out[ML_KEM_SHARED_SECRET_BYTES],
     int dv = vinfo->dv;
 
     /* FIPS 203 "y" vector */
-    if (!gencbd_vector_ntt(y, cbd_1, &counter, r, rank, mdctx, key))
+    if (!sops->cbd_vector(y, r, &counter, rank, eta1, /*apply_ntt=*/1, mdctx, key))
         return 0;
     /* FIPS 203 "v" scalar */
     inner_product(&v, key->t, y, rank);
@@ -1315,7 +1380,7 @@ int encrypt_cpa(uint8_t out[ML_KEM_SHARED_SECRET_BYTES],
     matrix_mult_intt(u, key->m, y, rank);
 
     /* All done with |y|, now free to reuse tmp[0] for FIPS 203 |e1| */
-    if (!gencbd_vector(e1, cbd_2, &counter, r, rank, mdctx, key))
+    if (!sops->cbd_vector(e1, r, &counter, rank, /*eta=*/2, /*apply_ntt=*/0, mdctx, key))
         return 0;
     vector_add(u, e1, rank);
     vector_compress(u, du, rank);
@@ -1405,6 +1470,7 @@ static void encode_prvkey(uint8_t *out, const ML_KEM_KEY *key)
 static int parse_pubkey(const uint8_t *in, EVP_MD_CTX *mdctx, ML_KEM_KEY *key)
 {
     const ML_KEM_VINFO *vinfo = key->vinfo;
+    const ML_KEM_SAMPLE_OPS *sops = ml_kem_sample_ops();
 
     /* Decode and check |t| */
     if (!vector_decode_12(key->t, in, vinfo->rank)) {
@@ -1420,7 +1486,7 @@ static int parse_pubkey(const uint8_t *in, EVP_MD_CTX *mdctx, ML_KEM_KEY *key)
      * Also pre-compute the matrix expansion, stored with the public key.
      */
     if (!hash_h(key->pkhash, in, vinfo->pubkey_bytes, mdctx, key)
-        || !matrix_expand(mdctx, key)) {
+        || !sops->matrix_expand(mdctx, key)) {
         ERR_raise_data(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR,
                        "internal error while parsing %s public key",
                        vinfo->algorithm_name);
@@ -1498,9 +1564,9 @@ int genkey(const uint8_t seed[ML_KEM_SEED_BYTES],
     const uint8_t *const sigma = hashed + ML_KEM_RANDOM_BYTES;
     uint8_t augmented_seed[ML_KEM_RANDOM_BYTES + 1];
     const ML_KEM_VINFO *vinfo = key->vinfo;
-    CBD_FUNC cbd_1 = CBD1(vinfo->evp_type);
+    const ML_KEM_SAMPLE_OPS *sops = ml_kem_sample_ops();
+    int eta1 = ETA1(vinfo->evp_type);
     int rank = vinfo->rank;
-    uint8_t counter = 0;
     int ret = 0;
 
     /*
@@ -1516,9 +1582,8 @@ int genkey(const uint8_t seed[ML_KEM_SEED_BYTES],
     CONSTTIME_DECLASSIFY(key->rho, ML_KEM_RANDOM_BYTES);
 
     /* FIPS 203 |e| vector is initial value of key->t */
-    if (!matrix_expand(mdctx, key)
-        || !gencbd_vector_ntt(key->s, cbd_1, &counter, sigma, rank, mdctx, key)
-        || !gencbd_vector_ntt(key->t, cbd_1, &counter, sigma, rank, mdctx, key))
+    if (!sops->matrix_expand(mdctx, key)
+        || !sops->keygen_noise(key->s, key->t, sigma, rank, eta1, mdctx, key))
         goto end;
 
     /* To |e| we now add the product of transpose |m| and |s|, giving |t|. */
