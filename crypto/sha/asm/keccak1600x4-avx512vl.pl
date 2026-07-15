@@ -85,7 +85,7 @@ $sf_size="856";       # 48 + 808 = 856 bytes
 # Emit an internal helper call used by one-shot wrappers.
 # - Win64: call the provided *_internal shim and bracket it with 32-byte
 #   shadow space so shim entry can use xlate-compatible [rsp+8]/[rsp+16].
-# - non-Win64: call the public API symbol (same base name without _internal).
+# - non-Win64: call the local entry point corresponding to the public API.
 # The argument must be the shim/internal symbol name, e.g.
 #   SHA3_shake128_x4_inc_squeeze_avx512vl_internal
 sub call_internal {
@@ -100,8 +100,13 @@ sub call_internal {
     add     \$32, %rsp
 ___
 
+    # The public symbol is a forward reference here.  x86_64-xlate.pl
+    # processes input as a stream and has not seen its later .globl directive,
+    # so a symbol-prefix build would not prefix this call even though it
+    # prefixes the eventual definition.  The local entry label avoids that
+    # order dependency and also avoids an interposable-symbol call.
     return <<___;
-    call    $external_name
+    call    .L_$external_name
 ___
 }
 
