@@ -538,6 +538,10 @@ static void scalar_mult_generic(scalar *out, const scalar *lhs,
                                 const scalar *rhs);
 static void scalar_mult_avx2(scalar *out, const scalar *lhs,
                              const scalar *rhs);
+static void scalar_mult_add_generic(scalar *out, const scalar *lhs,
+                                    const scalar *rhs);
+static void scalar_mult_add_avx2(scalar *out, const scalar *lhs,
+                                 const scalar *rhs);
 
 typedef void (*ml_kem_scalar_basemul_fn)(scalar *out, const scalar *lhs,
                                          const scalar *rhs);
@@ -547,12 +551,14 @@ static ml_kem_scalar_binop_fn scalar_sub = scalar_sub_generic;
 static ml_kem_scalar_unop_fn scalar_ntt = scalar_ntt_generic;
 static ml_kem_scalar_unop_fn scalar_inverse_ntt = scalar_inverse_ntt_generic;
 static ml_kem_scalar_basemul_fn scalar_mult = scalar_mult_generic;
+static ml_kem_scalar_basemul_fn scalar_mult_add = scalar_mult_add_generic;
 #else
 # define scalar_add_generic scalar_add
 # define scalar_sub_generic scalar_sub
 # define scalar_ntt_generic scalar_ntt
 # define scalar_inverse_ntt_generic scalar_inverse_ntt
 # define scalar_mult_generic scalar_mult
+# define scalar_mult_add_generic scalar_mult_add
 #endif
 
 static CRYPTO_ONCE ml_kem_poly_once = CRYPTO_ONCE_STATIC_INIT;
@@ -571,6 +577,7 @@ static void ml_kem_poly_init(void)
         scalar_ntt = scalar_ntt_avx2;
         scalar_inverse_ntt = scalar_inverse_ntt_avx2;
         scalar_mult = scalar_mult_avx2;
+        scalar_mult_add = scalar_mult_add_avx2;
     }
 #endif
 }
@@ -725,9 +732,8 @@ static void scalar_mult_avx2(scalar *out, const scalar *lhs,
 #endif
 
 /* Above, but add the result to an existing scalar */
-static ossl_inline
-void scalar_mult_add(scalar *out, const scalar *lhs,
-                     const scalar *rhs)
+static void scalar_mult_add_generic(scalar *out, const scalar *lhs,
+                                    const scalar *rhs)
 {
     uint16_t *curr = out->c, *end = curr + DEGREE;
     const uint16_t *lc = lhs->c, *rc = rhs->c;
@@ -744,6 +750,14 @@ void scalar_mult_add(scalar *out, const scalar *lhs,
         *c1 = reduce(*c1 + l0 * r1 + l1 * r0);
     } while (curr < end);
 }
+
+#if defined(ML_KEM_POLY_ASM)
+static void scalar_mult_add_avx2(scalar *out, const scalar *lhs,
+                                 const scalar *rhs)
+{
+    ml_kem_basemul_acc_avx2(out->c, lhs->c, rhs->c);
+}
+#endif
 
 /*-
  * FIPS 203, Section 4.2.1, Algorithm 5: "ByteEncode_d", for 2<=d<=12.

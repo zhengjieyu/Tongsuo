@@ -39,8 +39,14 @@
 #   - The conditional subtraction of q is branch-free (subtract, arithmetic
 #     shift for the sign mask, masked add-back), matching the constant-time
 #     contract of reduce_once() without relying on compiler behavior.
-#   - Only volatile registers (ymm0-ymm3, rax) are used and no stack space
-#     is consumed, so no SEH unwind bookkeeping is required on Windows.
+#   - Vector register usage by routine: add/sub use ymm0-ymm3; ntt/intt and
+#     basemul use ymm0-ymm5.  All of these map to xmm0-xmm5, which are
+#     volatile (caller-saved) under both the SysV and Windows x64 ABIs, so no
+#     xmm save/restore or SEH unwind bookkeeping is emitted.  The integer
+#     scratch registers (rax, rcx, rdx, rsi, rdi, r8, r9) are ABI argument or
+#     volatile registers under SysV; the perlasm translator saves and restores
+#     rsi/rdi as required on Windows, where they are callee-saved.  No routine
+#     touches ymm6-ymm15 or allocates stack space.
 #   - Must be kept functionally synchronized with ml_kem.c.
 ###############################################################################
 
@@ -709,17 +715,17 @@ ___
 #   rsi - const uint16_t *lhs (canonical)
 #   rdx - const uint16_t *rhs (canonical)
 ###############################################################################
-$code .= <<___;
-.globl  ml_kem_basemul_avx2
-.type   ml_kem_basemul_avx2,\@function,3
+# One iteration of the base-multiplication loop.  $acc selects the tail:
+#   $acc == 0 -> out  = l*r          (ml_kem_basemul_avx2)
+#   $acc == 1 -> out += l*r          (ml_kem_basemul_acc_avx2)
+# Both variants reach a canonical [0, q) result before the store.  In the
+# accumulate case the loaded out is canonical, the product is canonical, so
+# the sum is in [0, 2q) and one csubq restores [0, q).  $label names the loop.
+sub basemul_body {
+    my ($label, $acc) = @_;
+    my $code = <<___;
 .align 32
-ml_kem_basemul_avx2:
-.cfi_startproc
-    lea     .Lzmodm(%rip), %rax
-    mov     \$16, %r9d
-
-.align 32
-.Lbasemul_loop:
+$label:
     vmovdqu (%rsi), %ymm0
     vpshufb .Lshuf_even(%rip), %ymm0, %ymm1  # l0 lanes (0..3, 8..11)
     vpshufb .Lshuf_odd(%rip), %ymm0, %ymm2   # l1
@@ -728,35 +734,89 @@ ml_kem_basemul_avx2:
     vpshufb .Lshuf_odd(%rip), %ymm0, %ymm4   # r1
     vmovdqa %ymm1, %ymm5                     # keep l0 for the odd output
 ___
-$code .= fq_inplace("%ymm5", "%ymm4", "%ymm0");     # D1 = l0*r1*R^-1
-$code .= fq_inplace("%ymm1", "%ymm3", "%ymm0");     # A  = l0*r0*R^-1
-$code .= fq_inplace("%ymm3", "%ymm2", "%ymm0");     # X2 = l1*r0*R^-1
-$code .= <<___;
+    $code .= fq_inplace("%ymm5", "%ymm4", "%ymm0");     # D1 = l0*r1*R^-1
+    $code .= fq_inplace("%ymm1", "%ymm3", "%ymm0");     # A  = l0*r0*R^-1
+    $code .= fq_inplace("%ymm3", "%ymm2", "%ymm0");     # X2 = l1*r0*R^-1
+    $code .= <<___;
     vpaddw  %ymm5, %ymm3, %ymm3              # bound: D = D1 + X2 in (-2q, 2q)
 ___
-$code .= fq_inplace("%ymm3", ".Lr2_16(%rip)", "%ymm0");  # D*R^2*R^-1 = out1
-$code .= canon_inplace("%ymm3", "%ymm0");
-$code .= fq_inplace("%ymm2", "%ymm4", "%ymm0");     # B = l1*r1*R^-1
-$code .= fq_inplace("%ymm2", "(%rax)", "%ymm0");    # C = l1*r1*zeta*R^-1
-$code .= <<___;
+    $code .= fq_inplace("%ymm3", ".Lr2_16(%rip)", "%ymm0"); # D*R^2*R^-1 = out1
+    $code .= canon_inplace("%ymm3", "%ymm0");
+    $code .= fq_inplace("%ymm2", "%ymm4", "%ymm0");     # B = l1*r1*R^-1
+    $code .= fq_inplace("%ymm2", "(%rax)", "%ymm0");    # C = l1*r1*zeta*R^-1
+    $code .= <<___;
     vpaddw  %ymm2, %ymm1, %ymm1              # bound: T = A + C in (-2q, 2q)
 ___
-$code .= fq_inplace("%ymm1", ".Lr2_16(%rip)", "%ymm0");  # T*R^2*R^-1 = out0
-$code .= canon_inplace("%ymm1", "%ymm0");
-$code .= <<___;
+    $code .= fq_inplace("%ymm1", ".Lr2_16(%rip)", "%ymm0"); # T*R^2*R^-1 = out0
+    $code .= canon_inplace("%ymm1", "%ymm0");
+    $code .= <<___;
     vpunpcklwd %ymm3, %ymm1, %ymm0           # interleave out0/out1 pairs
+___
+    $code .= <<___ if ($acc);
+    vpaddw  (%rdi), %ymm0, %ymm0             # bound: out + product in [0, 2q)
+    vpsubw  .Lq16(%rip), %ymm0, %ymm1        # csubq
+    vpsraw  \$15, %ymm1, %ymm2
+    vpand   .Lq16(%rip), %ymm2, %ymm2
+    vpaddw  %ymm2, %ymm1, %ymm0              # in [0, q)
+___
+    $code .= <<___;
     vmovdqu %ymm0, (%rdi)
     add     \$32, %rsi
     add     \$32, %rdx
     add     \$32, %rdi
     add     \$32, %rax
     dec     %r9d
-    jnz     .Lbasemul_loop
+    jnz     $label
 
     vzeroupper
     ret
+___
+    return $code;
+}
+
+$code .= <<___;
+.globl  ml_kem_basemul_avx2
+.type   ml_kem_basemul_avx2,\@function,3
+.align 32
+ml_kem_basemul_avx2:
+.cfi_startproc
+    lea     .Lzmodm(%rip), %rax
+    mov     \$16, %r9d
+___
+$code .= basemul_body(".Lbasemul_loop", 0);
+$code .= <<___;
 .cfi_endproc
 .size   ml_kem_basemul_avx2, .-ml_kem_basemul_avx2
+___
+
+###############################################################################
+# ml_kem_basemul_acc_avx2
+#
+# Description:
+#   NTT-domain base multiply-accumulate, semantically identical to
+#   scalar_mult_add() in ml_kem.c:  out += l*r  in GF(q)[X]/(X^2 - kModRoots[i]).
+#   Used by inner_product(), matrix_mult_intt() and matrix_mult_transpose_add()
+#   for the second and later terms of each dot product, so that the ML-KEM
+#   matrix/vector multiplications run on the AVX2 backend as well.
+#
+# Parameters:
+#   rdi - uint16_t *out (canonical, read-modify-write)
+#   rsi - const uint16_t *lhs (canonical)
+#   rdx - const uint16_t *rhs (canonical)
+###############################################################################
+$code .= <<___;
+.globl  ml_kem_basemul_acc_avx2
+.type   ml_kem_basemul_acc_avx2,\@function,3
+.align 32
+ml_kem_basemul_acc_avx2:
+.cfi_startproc
+    lea     .Lzmodm(%rip), %rax
+    mov     \$16, %r9d
+___
+$code .= basemul_body(".Lbasemul_acc_loop", 1);
+$code .= <<___;
+.cfi_endproc
+.size   ml_kem_basemul_acc_avx2, .-ml_kem_basemul_acc_avx2
 ___
 
 ###############################################################################
@@ -798,12 +858,14 @@ ml_kem_poly_avx2_capable:
 .globl  ml_kem_ntt_avx2
 .globl  ml_kem_intt_avx2
 .globl  ml_kem_basemul_avx2
+.globl  ml_kem_basemul_acc_avx2
 .type   ml_kem_scalar_add_avx2,\@abi-omnipotent
 ml_kem_scalar_add_avx2:
 ml_kem_scalar_sub_avx2:
 ml_kem_ntt_avx2:
 ml_kem_intt_avx2:
 ml_kem_basemul_avx2:
+ml_kem_basemul_acc_avx2:
     .byte   0x0f,0x0b       # ud2
     ret
 .size   ml_kem_scalar_add_avx2, .-ml_kem_scalar_add_avx2

@@ -294,6 +294,8 @@ void ml_kem_ntt_avx2(uint16_t *c);
 void ml_kem_intt_avx2(uint16_t *c);
 void ml_kem_basemul_avx2(uint16_t *out, const uint16_t *lhs,
                          const uint16_t *rhs);
+void ml_kem_basemul_acc_avx2(uint16_t *out, const uint16_t *lhs,
+                             const uint16_t *rhs);
 # endif
 
 #endif  /* OPENSSL_HEADER_ML_KEM_H */
