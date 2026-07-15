@@ -25,50 +25,13 @@
     && (defined(__x86_64) || defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) \
     && !defined(OPENSSL_NO_ASM)
 
-/* External assembly function declarations */
-extern void SHA3_shake128_x4_inc_absorb_avx512vl(
-    uint64_t *state,
-    const void *in0, const void *in1,
-    const void *in2, const void *in3,
-    size_t inlen);
-
-extern void SHA3_shake256_x4_inc_absorb_avx512vl(
-    uint64_t *state,
-    const void *in0, const void *in1,
-    const void *in2, const void *in3,
-    size_t inlen);
-
-extern void SHA3_shake128_x4_inc_finalize_avx512vl(uint64_t *state);
-extern void SHA3_shake256_x4_inc_finalize_avx512vl(uint64_t *state);
-
-extern void SHA3_shake128_x4_inc_squeeze_avx512vl(
-    void *out0, void *out1,
-    void *out2, void *out3,
-    size_t outlen,
-    uint64_t *state);
-
-extern void SHA3_shake256_x4_inc_squeeze_avx512vl(
-    void *out0, void *out1,
-    void *out2, void *out3,
-    size_t outlen,
-    uint64_t *state);
-
-/* One-shot assembly function declarations */
-extern void SHA3_shake128_x4_avx512vl(
-    void *out0, void *out1,
-    void *out2, void *out3,
-    size_t outlen,
-    const void *in0, const void *in1,
-    const void *in2, const void *in3,
-    size_t inlen);
-
-extern void SHA3_shake256_x4_avx512vl(
-    void *out0, void *out1,
-    void *out2, void *out3,
-    size_t outlen,
-    const void *in0, const void *in1,
-    const void *in2, const void *in3,
-    size_t inlen);
+/*
+ * The low-level assembly entry points (SHA3_shake*_x4_avx512vl) are declared
+ * in internal/sha3.h rather than here, so that symbol-prefix builds rename the
+ * C references to them in step with the prefixed assembly symbols.  Declaring
+ * them in a .c file would leave the references unprefixed and break linking
+ * under --symbol-prefix.
+ */
 
 /*
  * SHAKE-128 x4 Implementation
