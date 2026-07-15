@@ -441,33 +441,49 @@ int kdf(uint8_t out[ML_KEM_SHARED_SECRET_BYTES],
  * uniformly distributed elements in the range [0,q). This is used for matrix
  * expansion and only operates on public inputs.
  */
-static __owur
-int sample_scalar(scalar *out, EVP_MD_CTX *mdctx)
+/*
+ * Rejection-sample one squeezed block into out->c starting at *idx, advancing
+ * *idx.  Each group of 3 bytes yields two 12-bit candidates, kept if < kPrime.
+ * Stops when the polynomial is full (DEGREE) or the block is exhausted.
+ *
+ * Split out of sample_scalar so the SHAKE squeeze and the rejection parser can
+ * be exercised independently once the x4 backend squeezes per-lane blocks.
+ * |buflen| must be a positive multiple of 3.
+ */
+static void sample_rej_parse(scalar *out, int *idx,
+                             const uint8_t *buf, size_t buflen)
 {
-    uint16_t *curr = out->c, *endout = curr + DEGREE;
-    uint8_t buf[SCALAR_SAMPLING_BUFSIZE], *in;
-    uint8_t *endin = buf + sizeof(buf);
+    const uint8_t *in = buf, *endin = buf + buflen;
     uint16_t d;
     uint8_t b1, b2, b3;
 
     do {
-        if (!EVP_DigestSqueeze(mdctx, in = buf, sizeof(buf)))
-            return 0;
-        do {
-            b1 = *in++;
-            b2 = *in++;
-            b3 = *in++;
+        b1 = *in++;
+        b2 = *in++;
+        b3 = *in++;
 
-            if (curr >= endout)
-                break;
-            if ((d = ((b2 & 0x0f) << 8) + b1) < kPrime)
-                *curr++ = d;
-            if (curr >= endout)
-                break;
-            if ((d = (b3 << 4) + (b2 >> 4)) < kPrime)
-                *curr++ = d;
-        } while (in < endin);
-    } while (curr < endout);
+        if (*idx >= DEGREE)
+            break;
+        if ((d = ((b2 & 0x0f) << 8) + b1) < kPrime)
+            out->c[(*idx)++] = d;
+        if (*idx >= DEGREE)
+            break;
+        if ((d = (b3 << 4) + (b2 >> 4)) < kPrime)
+            out->c[(*idx)++] = d;
+    } while (in < endin);
+}
+
+static __owur
+int sample_scalar(scalar *out, EVP_MD_CTX *mdctx)
+{
+    uint8_t buf[SCALAR_SAMPLING_BUFSIZE];
+    int idx = 0;
+
+    do {
+        if (!EVP_DigestSqueeze(mdctx, buf, sizeof(buf)))
+            return 0;
+        sample_rej_parse(out, &idx, buf, sizeof(buf));
+    } while (idx < DEGREE);
     return 1;
 }
 
@@ -1139,17 +1155,18 @@ int matrix_expand(EVP_MD_CTX *mdctx, ML_KEM_KEY *key)
  * two this gives -2/2 with a probability of 1/16, -1/1 with probability 1/4,
  * and 0 with probability 3/8.
  */
-static __owur
-int cbd_2(scalar *out, uint8_t in[ML_KEM_RANDOM_BYTES + 1],
-          EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+/*
+ * CBD parser for eta=2: fold |4 * DEGREE / 8| PRF bytes into DEGREE
+ * coefficients, no PRF/EVP involved.  Split out of cbd_2 so the SHAKE256 PRF
+ * and this constant-time bit folding can be exercised independently by the x4
+ * backend (which squeezes four PRF buffers at once and parses each here).
+ */
+static void cbd_eta2_parse(scalar *out, const uint8_t *randbuf)
 {
     uint16_t *curr = out->c, *end = curr + DEGREE;
-    uint8_t randbuf[4 * DEGREE / 8], *r = randbuf;  /* 64 * eta slots */
+    const uint8_t *r = randbuf;
     uint16_t value, mask;
     uint8_t b;
-
-    if (!prf(randbuf, sizeof(randbuf), in, mdctx, key))
-        return 0;
 
     do {
         b = *r++;
@@ -1171,6 +1188,17 @@ int cbd_2(scalar *out, uint8_t in[ML_KEM_RANDOM_BYTES + 1],
         mask = constish_time_non_zero(value >> 15);
         *curr++ = value + (kPrime & mask);
     } while (curr < end);
+}
+
+static __owur
+int cbd_2(scalar *out, uint8_t in[ML_KEM_RANDOM_BYTES + 1],
+          EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+{
+    uint8_t randbuf[4 * DEGREE / 8];  /* 64 * eta slots */
+
+    if (!prf(randbuf, sizeof(randbuf), in, mdctx, key))
+        return 0;
+    cbd_eta2_parse(out, randbuf);
     return 1;
 }
 
@@ -1180,17 +1208,17 @@ int cbd_2(scalar *out, uint8_t in[ML_KEM_RANDOM_BYTES + 1],
  * and setting the coefficient to the count of the first bits minus the count of
  * the second bits, resulting in a centered binomial distribution.
  */
-static __owur
-int cbd_3(scalar *out, uint8_t in[ML_KEM_RANDOM_BYTES + 1],
-          EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+/*
+ * CBD parser for eta=3: fold |6 * DEGREE / 8| PRF bytes into DEGREE
+ * coefficients, no PRF/EVP involved.  Split out of cbd_3 for the same reason
+ * as cbd_eta2_parse.
+ */
+static void cbd_eta3_parse(scalar *out, const uint8_t *randbuf)
 {
     uint16_t *curr = out->c, *end = curr + DEGREE;
-    uint8_t randbuf[6 * DEGREE / 8], *r = randbuf;  /* 64 * eta slots */
+    const uint8_t *r = randbuf;
     uint8_t b1, b2, b3;
     uint16_t value, mask;
-
-    if (!prf(randbuf, sizeof(randbuf), in, mdctx, key))
-        return 0;
 
     do {
         b1 = *r++;
@@ -1224,6 +1252,17 @@ int cbd_3(scalar *out, uint8_t in[ML_KEM_RANDOM_BYTES + 1],
         mask = constish_time_non_zero(value >> 15);
         *curr++ = value + (kPrime & mask);
     } while (curr < end);
+}
+
+static __owur
+int cbd_3(scalar *out, uint8_t in[ML_KEM_RANDOM_BYTES + 1],
+          EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+{
+    uint8_t randbuf[6 * DEGREE / 8];  /* 64 * eta slots */
+
+    if (!prf(randbuf, sizeof(randbuf), in, mdctx, key))
+        return 0;
+    cbd_eta3_parse(out, randbuf);
     return 1;
 }
 
