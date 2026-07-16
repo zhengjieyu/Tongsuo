@@ -29,6 +29,12 @@
 # define ML_KEM_POLY_ASM
 #endif
 
+#if defined(KECCAK1600_ASM) && !defined(OPENSSL_NO_ASM) \
+    && (defined(__x86_64) || defined(__x86_64__) \
+        || defined(_M_AMD64) || defined(_M_X64))
+# define ML_KEM_SAMPLE_X4
+#endif
+
 #if defined(OPENSSL_CONSTANT_TIME_VALIDATION)
 #include <valgrind/memcheck.h>
 #endif
@@ -1310,6 +1316,181 @@ int gencbd_vector_ntt(scalar *out, CBD_FUNC cbd, uint8_t *counter,
 #define CBD1(evp_type)  ((evp_type) == EVP_PKEY_ML_KEM_512 ? cbd_3 : cbd_2)
 #define ETA1(evp_type)  ((evp_type) == EVP_PKEY_ML_KEM_512 ? 3 : 2)
 
+#if defined(ML_KEM_SAMPLE_X4)
+# define ML_KEM_X4_LANES 4
+# define ML_KEM_CBD_MAX_BYTES (6 * DEGREE / 8)
+
+/*
+ * Sample up to four CBD polynomials with one SHAKE256 x4 invocation.  Lanes
+ * above |count| are initialized dummy lanes whose output is discarded.  The
+ * SHAKE input and all output buffers are cleansed because they are derived
+ * from a secret seed, including the dummy lanes.
+ */
+static void sample_cbd_x4(scalar *out[ML_KEM_X4_LANES], int count,
+                          const uint8_t seed[ML_KEM_RANDOM_BYTES],
+                          uint8_t first_nonce, int eta, int apply_ntt)
+{
+    uint8_t input[ML_KEM_X4_LANES][ML_KEM_RANDOM_BYTES + 1];
+    uint8_t randbuf[ML_KEM_X4_LANES][ML_KEM_CBD_MAX_BYTES];
+    size_t outlen = eta == 3 ? 6 * DEGREE / 8 : 4 * DEGREE / 8;
+    int i;
+
+    for (i = 0; i < ML_KEM_X4_LANES; i++) {
+        memcpy(input[i], seed, ML_KEM_RANDOM_BYTES);
+        input[i][ML_KEM_RANDOM_BYTES] =
+            (uint8_t)(first_nonce + (i < count ? i : 0));
+    }
+
+    ossl_sha3_shake256_x4_avx512vl(randbuf[0], randbuf[1],
+                                   randbuf[2], randbuf[3], outlen,
+                                   input[0], input[1], input[2], input[3],
+                                   sizeof(input[0]));
+
+    for (i = 0; i < count; i++) {
+        if (eta == 3)
+            cbd_eta3_parse(out[i], randbuf[i]);
+        else
+            cbd_eta2_parse(out[i], randbuf[i]);
+        if (apply_ntt)
+            scalar_ntt(out[i]);
+    }
+
+    OPENSSL_cleanse(input, sizeof(input));
+    OPENSSL_cleanse(randbuf, sizeof(randbuf));
+}
+
+/*
+ * Expand complete groups of four matrix entries with SHAKE128 x4.  Rejection
+ * sampling has no fixed squeeze bound, so each lane maintains its own output
+ * index and completed lanes are no longer parsed.  The ML-KEM-768 one-entry
+ * tail is deliberately left on the generic path in this phase.
+ */
+static __owur int matrix_expand_x4(EVP_MD_CTX *mdctx, ML_KEM_KEY *key)
+{
+    KECCAK1600_X4_AVX512VL_CTX ctx;
+    uint8_t input[ML_KEM_X4_LANES][ML_KEM_RANDOM_BYTES + 2];
+    uint8_t buf[ML_KEM_X4_LANES][SCALAR_SAMPLING_BUFSIZE];
+    scalar *out = key->m;
+    int rank = key->vinfo->rank;
+    int total = rank * rank;
+    int pos = 0;
+
+    while (total - pos >= ML_KEM_X4_LANES) {
+        int idx[ML_KEM_X4_LANES] = { 0, 0, 0, 0 };
+        unsigned int done = 0;
+        int lane;
+
+        for (lane = 0; lane < ML_KEM_X4_LANES; lane++) {
+            int matrix_pos = pos + lane;
+
+            memcpy(input[lane], key->rho, ML_KEM_RANDOM_BYTES);
+            input[lane][ML_KEM_RANDOM_BYTES] =
+                (uint8_t)(matrix_pos / rank);
+            input[lane][ML_KEM_RANDOM_BYTES + 1] =
+                (uint8_t)(matrix_pos % rank);
+        }
+
+        ossl_sha3_shake128_x4_inc_init_avx512vl(&ctx);
+        ossl_sha3_shake128_x4_inc_absorb_avx512vl(
+            &ctx, input[0], input[1], input[2], input[3], sizeof(input[0]));
+
+        do {
+            ossl_sha3_shake128_x4_inc_squeeze_avx512vl(
+                buf[0], buf[1], buf[2], buf[3], sizeof(buf[0]), &ctx);
+            for (lane = 0; lane < ML_KEM_X4_LANES; lane++) {
+                if ((done & (1U << lane)) != 0)
+                    continue;
+                sample_rej_parse(&out[lane], &idx[lane], buf[lane],
+                                 sizeof(buf[lane]));
+                if (idx[lane] == DEGREE)
+                    done |= 1U << lane;
+            }
+        } while (done != (1U << ML_KEM_X4_LANES) - 1);
+
+        ossl_sha3_shake128_x4_inc_cleanup_avx512vl(&ctx);
+        out += ML_KEM_X4_LANES;
+        pos += ML_KEM_X4_LANES;
+    }
+
+    if (pos < total) {
+        uint8_t tail[ML_KEM_RANDOM_BYTES + 2];
+
+        memcpy(tail, key->rho, ML_KEM_RANDOM_BYTES);
+        do {
+            tail[ML_KEM_RANDOM_BYTES] = (uint8_t)(pos / rank);
+            tail[ML_KEM_RANDOM_BYTES + 1] = (uint8_t)(pos % rank);
+            if (!EVP_DigestInit_ex(mdctx, key->shake128_md, NULL)
+                || !EVP_DigestUpdate(mdctx, tail, sizeof(tail))
+                || !sample_scalar(out++, mdctx))
+                return 0;
+            pos++;
+        } while (pos < total);
+    }
+    return 1;
+}
+
+/* Keygen samples the nonce-continuous logical sequence s || e. */
+static __owur
+int keygen_noise_x4(scalar *s, scalar *e,
+                    const uint8_t seed[ML_KEM_RANDOM_BYTES],
+                    int rank, int eta,
+                    EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+{
+    scalar *task[2 * ML_KEM_X4_LANES];
+    int total = 2 * rank;
+    int pos = 0;
+    int i;
+
+    for (i = 0; i < rank; i++) {
+        task[i] = &s[i];
+        task[rank + i] = &e[i];
+    }
+    while (total - pos >= ML_KEM_X4_LANES) {
+        scalar *lane[ML_KEM_X4_LANES];
+
+        for (i = 0; i < ML_KEM_X4_LANES; i++)
+            lane[i] = task[pos + i];
+        sample_cbd_x4(lane, ML_KEM_X4_LANES, seed, (uint8_t)pos, eta, 1);
+        pos += ML_KEM_X4_LANES;
+    }
+
+    /* Phase 3d keeps a non-full keygen batch on the established EVP path. */
+    while (pos < total) {
+        uint8_t input[ML_KEM_RANDOM_BYTES + 1];
+        CBD_FUNC cbd = eta == 3 ? cbd_3 : cbd_2;
+        int ok;
+
+        memcpy(input, seed, ML_KEM_RANDOM_BYTES);
+        input[ML_KEM_RANDOM_BYTES] = (uint8_t)pos;
+        ok = cbd(task[pos], input, mdctx, key);
+        OPENSSL_cleanse(input, sizeof(input));
+        if (!ok)
+            return 0;
+        scalar_ntt(task[pos]);
+        pos++;
+    }
+    return 1;
+}
+
+/* Encrypt y/e1 vectors use initialized dummy lanes when rank is below four. */
+static __owur
+int cbd_vector_x4(scalar *out, const uint8_t seed[ML_KEM_RANDOM_BYTES],
+                  uint8_t *counter, int rank, int eta, int apply_ntt,
+                  EVP_MD_CTX *mdctx, const ML_KEM_KEY *key)
+{
+    scalar *lane[ML_KEM_X4_LANES] = { NULL, NULL, NULL, NULL };
+    int i;
+
+    (void)mdctx;
+    (void)key;
+    for (i = 0; i < rank; i++)
+        lane[i] = &out[i];
+    sample_cbd_x4(lane, rank, seed, *counter, eta, apply_ntt);
+    *counter = (uint8_t)(*counter + rank);
+    return 1;
+}
+#endif
+
 /*
  * Task-level sampling vtable.  Phase 3 introduces this so that a SHAKE x4
  * backend can batch four independent Keccak streams inside matrix expansion
@@ -1367,9 +1548,21 @@ static const ML_KEM_SAMPLE_OPS ml_kem_sample_generic = {
     cbd_vector_generic,
 };
 
-/* Phase 3 (3b): only the generic table exists; x4 backend is added in 3d. */
+#if defined(ML_KEM_SAMPLE_X4)
+static const ML_KEM_SAMPLE_OPS ml_kem_sample_avx512vl = {
+    matrix_expand_x4,
+    keygen_noise_x4,
+    cbd_vector_x4,
+};
+#endif
+
+/* Select once per high-level operation; an active backend never falls back. */
 static const ML_KEM_SAMPLE_OPS *ml_kem_sample_ops(void)
 {
+#if defined(ML_KEM_SAMPLE_X4)
+    if (SHA3_avx512vl_capable())
+        return &ml_kem_sample_avx512vl;
+#endif
     return &ml_kem_sample_generic;
 }
 
